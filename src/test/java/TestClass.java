@@ -1,6 +1,4 @@
-package test.java;
-
-import main.java.com.github.anmsakura.minecraftclean.Main;
+import com.github.anmsakura.minecraftclean.Main;
 import org.junit.Test;
 
 import java.io.IOException;
