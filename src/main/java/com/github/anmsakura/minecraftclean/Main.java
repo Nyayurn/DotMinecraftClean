@@ -13,16 +13,16 @@
 
 package com.github.anmsakura.minecraftclean;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
-import com.alibaba.fastjson2.JSONObject;
+import cn.hutool.core.io.FileUtil;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * 清理.minecraft文件夹下的无用资源和依赖库(assets和libraries文件夹)
@@ -30,119 +30,105 @@ import java.util.Objects;
  * @author ANMSakura
  */
 public class Main {
-    public static void main(String... args) throws IOException {
-        // 为GUI设置主题。
+    public static void main(String... args) {
         // FlatAtomOneDarkIJTheme.setup();
-        // .minecraft
-        File minecraftFolder = new File(args[0].trim());
-        // .minecraft/versions
-        File versionsFolder = new File(minecraftFolder, "versions");
-        // .minecraft/assets
-        File assetsFolder = new File(minecraftFolder, "assets");
-        // .minecraft/libraries
-        File librariesFolder = new File(minecraftFolder, "libraries");
-        // 被依赖的文件
-        List<File> usefulAssetFiles = new ArrayList<>();
-        List<File> usefulLibraryFiles = new ArrayList<>();
+        String dotMinecraftPath = args[0].trim();
+        String versionsPath = dotMinecraftPath + FileUtil.FILE_SEPARATOR + "versions";
+        String assetsPath = dotMinecraftPath + FileUtil.FILE_SEPARATOR + "assets";
+        String librariesPath = dotMinecraftPath + FileUtil.FILE_SEPARATOR + "libraries";
+        List<File> dependenciesAssets = new ArrayList<>();
+        List<File> dependenciesLibraries = new ArrayList<>();
 
         // 遍历版本文件夹
-        if (versionsFolder.exists()) {
-            for (File versionFolder : Objects.requireNonNull(versionsFolder.listFiles())) {
+        if (FileUtil.exist(versionsPath)) {
+            Arrays.stream(FileUtil.ls(versionsPath)).filter(FileUtil::isDirectory).forEach(versionFolder -> {
                 // 读取版本.json
-                JSONObject versionsJson = JSON.parseObject(
-                        Files.readAllBytes(new File(versionFolder, versionFolder.getName() + ".json").toPath()));
+                JSONObject versionsJson = JSONUtil.readJSONObject(
+                        new File(versionFolder, versionFolder.getName() + ".json"), StandardCharsets.UTF_8);
                 // 版本json文件内的assetsIndex
                 JSONObject assetIndexJson = versionsJson.getJSONObject("assetIndex");
                 // 获取assetsIndex.json文件
-                File assetsIndexFile = new File(assetsFolder, "indexes/" + assetIndexJson.getString("id") + ".json");
+                File assetsIndexFile = new File(assetsPath,
+                        String.format("indexes/%s.json", assetIndexJson.getStr("id")));
 
                 // 添加资源
-                if (assetsIndexFile.exists()) {
+                if (FileUtil.exist(assetsIndexFile)) {
                     // 添加assetsIndex.json
-                    usefulAssetFiles.add(assetsIndexFile);
+                    dependenciesAssets.add(assetsIndexFile);
                     // 读取assetsIndex.json
-                    JSONObject assetsIndexJson = JSON.parseObject(Files.readAllBytes(assetsIndexFile.toPath()));
+                    JSONObject assetsIndexJson = JSONUtil.readJSONObject(assetsIndexFile,
+                            StandardCharsets.UTF_8);
                     // 获取assetsIndex.json的objects
                     JSONObject objectsJson = assetsIndexJson.getJSONObject("objects");
 
                     // 获取并添加被依赖的assets文件
-                    for (String key : objectsJson.keySet()) {
-                        JSONObject objectObj = objectsJson.getJSONObject(key);
-                        String hash = objectObj.getString("hash");
-                        File assetFile = new File(assetsFolder, "objects/" + hash.substring(0, 2) + "/" + hash);
-                        usefulAssetFiles.add(assetFile);
-                    }
+                    objectsJson.keySet().forEach(key -> {
+                        String hash = objectsJson.getByPath(key + ".hash", String.class);
+                        File assetFile = new File(assetsPath,
+                                String.format("objects/%s/%s", hash.substring(0, 2), hash));
+                        dependenciesAssets.add(assetFile);
+                    });
                 }
 
                 // 版本json文件内的libraries
                 JSONArray librariesJsonArray = versionsJson.getJSONArray("libraries");
 
                 // 添加依赖库
-                for (int i = 0; i < librariesJsonArray.size(); i++) {
-                    JSONObject libraryJson = librariesJsonArray.getJSONObject(i);
+                librariesJsonArray.jsonIter().forEach(libraryJson -> {
                     List<File> libraryFile = new ArrayList<>();
-                    if (libraryJson.containsKey("downloads")) {
+                    if (!libraryJson.isNull("downloads")) {
                         JSONObject downloadsJson = libraryJson.getJSONObject("downloads");
-                        if (downloadsJson.containsKey("artifact")) {
+                        if (!downloadsJson.isNull("artifact")) {
                             // 常规
                             JSONObject artifactJson = downloadsJson.getJSONObject("artifact");
-                            String path = artifactJson.getString("path");
-                            libraryFile.add(new File(librariesFolder, path));
-                        } else if (downloadsJson.containsKey("classifiers")) {
+                            String path = artifactJson.getStr("path");
+                            libraryFile.add(new File(librariesPath, path));
+                        } else if (!downloadsJson.isNull("classifiers")) {
                             // Lwjgl
                             JSONObject classifiersJson = downloadsJson.getJSONObject("classifiers");
-                            for (String key : classifiersJson.keySet()) {
+                            classifiersJson.keySet().forEach(key -> {
                                 JSONObject nativeJson = classifiersJson.getJSONObject(key);
-                                String path = nativeJson.getString("path");
-                                libraryFile.add(new File(librariesFolder, path));
-                            }
+                                String path = nativeJson.getStr("path");
+                                libraryFile.add(new File(librariesPath, path));
+                            });
                         }
-                    } else if (libraryJson.containsKey("url")) {
+                    } else if (!libraryJson.isNull("url")) {
                         // Fabric
-                        String[] parts = libraryJson.getString("name").split(":");
+                        String[] parts = libraryJson.getStr("name").split(":");
                         String path = String.format("%s/%s-%s.jar",
-                                                    String.join("/", parts[0].replaceAll("\\.", "/"), parts[1],
-                                                                parts[2]), parts[1], parts[2]);
-                        libraryFile.add(new File(librariesFolder, path));
+                                String.join("/", parts[0].replaceAll("\\.", "/"), parts[1],
+                                        parts[2]), parts[1], parts[2]);
+                        libraryFile.add(new File(librariesPath, path));
                     }
                     if (libraryFile.isEmpty()) {
                         System.out.println(libraryJson);
-                        continue;
+                    } else {
+                        dependenciesLibraries.addAll(libraryFile);
                     }
-                    usefulLibraryFiles.addAll(libraryFile);
-                }
-            }
+                });
+            });
         }
 
         // 删除Assets
-        if (assetsFolder.exists()) {
-            deleteFile(assetsFolder, usefulAssetFiles);
+        if (FileUtil.exist(assetsPath)) {
+            deleteFile(assetsPath, dependenciesAssets);
         }
 
         // 删除Libraries
-        if (librariesFolder.exists()) {
-            deleteFile(librariesFolder, usefulLibraryFiles);
+        if (FileUtil.exist(librariesPath)) {
+            deleteFile(librariesPath, dependenciesLibraries);
         }
     }
 
-    private static void deleteFile(File file, List<File> usefulFiles) {
-        if (file.isFile()) {
-            // 如果未被依赖，则删除
-            if (!usefulFiles.contains(file)) {
-                boolean ignored = file.delete();
+    private static void deleteFile(String path, List<File> usefulFiles) {
+        // 删除无用文件
+        FileUtil.loopFiles(path).stream().filter(FileUtil::isFile).forEach(f -> {
+            if (!usefulFiles.contains(new File(path))) {
+                FileUtil.del(f);
             }
-        } else {
-            // 如果是不空文件夹，则尝试删除文件夹内的所有文件
-            if (!(Objects.requireNonNull(file.list()).length == 0)) {
-                for (File listFile : Objects.requireNonNull(file.listFiles())) {
-                    // 递龟
-                    deleteFile(listFile, usefulFiles);
-                }
-            }
-            // 如果是空文件夹，则删除
-            if (Objects.requireNonNull(file.list()).length == 0) {
-                boolean ignored = file.delete();
-            }
-        }
+        });
+
+        // 清理空文件夹
+        FileUtil.cleanEmpty(new File(path));
     }
 }
